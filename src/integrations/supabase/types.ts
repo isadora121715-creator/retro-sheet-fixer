@@ -14,10 +14,314 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      clients: {
+        Row: {
+          created_at: string
+          display_label: string | null
+          id: string
+          name: string
+          notes: string | null
+          short_code: string | null
+        }
+        Insert: {
+          created_at?: string
+          display_label?: string | null
+          id?: string
+          name: string
+          notes?: string | null
+          short_code?: string | null
+        }
+        Update: {
+          created_at?: string
+          display_label?: string | null
+          id?: string
+          name?: string
+          notes?: string | null
+          short_code?: string | null
+        }
+        Relationships: []
+      }
+      email_imports: {
+        Row: {
+          created_at: string
+          detected_rfq: string | null
+          detected_supplier: string | null
+          error_message: string | null
+          from_address: string | null
+          from_name: string | null
+          gmail_message_id: string
+          gmail_thread_id: string | null
+          id: string
+          parsed_payload: Json | null
+          processed_at: string | null
+          received_at: string | null
+          snippet: string | null
+          status: string
+          subject: string | null
+        }
+        Insert: {
+          created_at?: string
+          detected_rfq?: string | null
+          detected_supplier?: string | null
+          error_message?: string | null
+          from_address?: string | null
+          from_name?: string | null
+          gmail_message_id: string
+          gmail_thread_id?: string | null
+          id?: string
+          parsed_payload?: Json | null
+          processed_at?: string | null
+          received_at?: string | null
+          snippet?: string | null
+          status?: string
+          subject?: string | null
+        }
+        Update: {
+          created_at?: string
+          detected_rfq?: string | null
+          detected_supplier?: string | null
+          error_message?: string | null
+          from_address?: string | null
+          from_name?: string | null
+          gmail_message_id?: string
+          gmail_thread_id?: string | null
+          id?: string
+          parsed_payload?: Json | null
+          processed_at?: string | null
+          received_at?: string | null
+          snippet?: string | null
+          status?: string
+          subject?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          email: string | null
+          full_name: string | null
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id: string
+        }
+        Update: {
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id?: string
+        }
+        Relationships: []
+      }
+      quote_items: {
+        Row: {
+          category: string
+          class: string | null
+          constructive: string | null
+          created_at: string
+          description: string | null
+          dn: string | null
+          face: string | null
+          id: string
+          item_code: string | null
+          material: string | null
+          material_type: string | null
+          notes: string | null
+          pipe_end: string | null
+          product: string | null
+          qty: number | null
+          rfq_id: string
+          sch_thk: string | null
+          source: string
+          specs: Json
+          unit_weight: number | null
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          class?: string | null
+          constructive?: string | null
+          created_at?: string
+          description?: string | null
+          dn?: string | null
+          face?: string | null
+          id?: string
+          item_code?: string | null
+          material?: string | null
+          material_type?: string | null
+          notes?: string | null
+          pipe_end?: string | null
+          product?: string | null
+          qty?: number | null
+          rfq_id: string
+          sch_thk?: string | null
+          source?: string
+          specs?: Json
+          unit_weight?: number | null
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          class?: string | null
+          constructive?: string | null
+          created_at?: string
+          description?: string | null
+          dn?: string | null
+          face?: string | null
+          id?: string
+          item_code?: string | null
+          material?: string | null
+          material_type?: string | null
+          notes?: string | null
+          pipe_end?: string | null
+          product?: string | null
+          qty?: number | null
+          rfq_id?: string
+          sch_thk?: string | null
+          source?: string
+          specs?: Json
+          unit_weight?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "quote_items_rfq_id_fkey"
+            columns: ["rfq_id"]
+            isOneToOne: false
+            referencedRelation: "rfqs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rfqs: {
+        Row: {
+          client_name: string | null
+          created_at: string
+          id: string
+          lote: string | null
+          notes: string | null
+          op: string | null
+          pi: string | null
+          quote_date: string | null
+          rfq_number: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          client_name?: string | null
+          created_at?: string
+          id?: string
+          lote?: string | null
+          notes?: string | null
+          op?: string | null
+          pi?: string | null
+          quote_date?: string | null
+          rfq_number: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          client_name?: string | null
+          created_at?: string
+          id?: string
+          lote?: string | null
+          notes?: string | null
+          op?: string | null
+          pi?: string | null
+          quote_date?: string | null
+          rfq_number?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      supplier_prices: {
+        Row: {
+          created_at: string
+          currency: string
+          email_message_id: string | null
+          id: string
+          price: number | null
+          quote_item_id: string
+          received_at: string | null
+          source: string
+          supplier_name: string
+        }
+        Insert: {
+          created_at?: string
+          currency?: string
+          email_message_id?: string | null
+          id?: string
+          price?: number | null
+          quote_item_id: string
+          received_at?: string | null
+          source?: string
+          supplier_name: string
+        }
+        Update: {
+          created_at?: string
+          currency?: string
+          email_message_id?: string | null
+          id?: string
+          price?: number | null
+          quote_item_id?: string
+          received_at?: string | null
+          source?: string
+          supplier_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "supplier_prices_quote_item_id_fkey"
+            columns: ["quote_item_id"]
+            isOneToOne: false
+            referencedRelation: "quote_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "supplier_prices_quote_item_id_fkey"
+            columns: ["quote_item_id"]
+            isOneToOne: false
+            referencedRelation: "quote_items_best"
+            referencedColumns: ["quote_item_id"]
+          },
+        ]
+      }
+      suppliers: {
+        Row: {
+          created_at: string
+          email_domains: string[]
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          email_domains?: string[]
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          email_domains?: string[]
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
-      [_ in never]: never
+      quote_items_best: {
+        Row: {
+          best_price: number | null
+          best_price_date: string | null
+          best_supplier: string | null
+          quote_item_id: string | null
+          quotes_count: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       [_ in never]: never
