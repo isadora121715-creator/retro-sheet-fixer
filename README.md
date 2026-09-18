@@ -1,14 +1,18 @@
-# Welcome to your Lovable project
+# Sheet Sync & Shine
+
+chat analise a planilha, e me de maneiras de deixar ela mais moderna e automática/automatizada. Preciso deixar ela atualizada, com as cotações que são enviadas pelo email (gmail), mas na maioria das vezes esqueço de preencher a planilha, então está tudo retroativo
 
 This project was built with [Lovable](https://lovable.dev).
 
+**Live app**: https://retro-sheet-fixer.lovable.app
+
 ## Build with Lovable
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
+Continue developing this project in the [Lovable editor](https://lovable.dev/projects/4aa87ecd-37d3-4399-9de2-3d6a031aab56).
 
 - **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+- **Stay in sync**: every change made in Lovable is committed straight to this repository.
+- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
 
 ## Development
 
@@ -20,10 +24,3 @@ cd <repository-name>
 npm i
 npm run dev
 ```
-
-## Built with
-
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
