@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CheckCircle2, Loader2, Mail, RefreshCw } from "lucide-react";
+import { Ban, CheckCircle2, Loader2, Mail, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { getFilterOptions } from "@/lib/quotes.functions";
 import { importCounts, listImports, setImportStatus, syncInbox } from "@/lib/gmail.functions";
 import type { EmailImportRow, EmailImportStatus } from "@/lib/email-imports.types";
+import { useSyncSettings } from "@/hooks/use-sync-settings";
 import { ImportReviewDialog } from "@/components/import-review-dialog";
+import { GmailSearchSettingsDialog } from "@/components/gmail-search-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -30,6 +32,8 @@ function Emails() {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<EmailImportStatus | "todos">("pendente");
   const [reviewing, setReviewing] = useState<EmailImportRow | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const syncSettings = useSyncSettings();
 
   const counts = useQuery({ queryKey: ["import-counts"], queryFn: () => importCounts() });
   const filterOptions = useQuery({
@@ -42,7 +46,15 @@ function Emails() {
   });
 
   const sync = useMutation({
-    mutationFn: () => syncInbox({ data: {} }),
+    mutationFn: () =>
+      syncInbox({
+        data: {
+          days: syncSettings.parsed.days,
+          subjectTerms: syncSettings.parsed.subjectTerms,
+          bodyTerms: syncSettings.parsed.bodyTerms,
+          fromAddresses: syncSettings.parsed.fromAddresses,
+        },
+      }),
     onSuccess: (result) => {
       toast.success(
         `${result.imported} e-mail(s) novo(s) lido(s)` +
@@ -78,14 +90,20 @@ function Emails() {
             Cotações recebidas por e-mail, lidas automaticamente e prontas para revisar.
           </p>
         </div>
-        <Button onClick={() => sync.mutate()} disabled={sync.isPending}>
-          {sync.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          Sincronizar Gmail
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setSettingsOpen(true)} title="Filtros de busca">
+            <SlidersHorizontal className="h-4 w-4" />
+            Filtros
+          </Button>
+          <Button onClick={() => sync.mutate()} disabled={sync.isPending}>
+            {sync.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Sincronizar Gmail
+          </Button>
+        </div>
       </div>
 
       <Tabs value={status} onValueChange={(v) => setStatus(v as EmailImportStatus | "todos")}>
@@ -136,6 +154,14 @@ function Emails() {
         open={reviewing !== null}
         onOpenChange={(open) => !open && setReviewing(null)}
         categories={filterOptions.data?.categories ?? []}
+      />
+
+      <GmailSearchSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        form={syncSettings.form}
+        onFormChange={syncSettings.setForm}
+        onSave={syncSettings.save}
       />
     </div>
   );

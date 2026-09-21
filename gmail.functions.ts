@@ -10,8 +10,35 @@ import {
   type ParsedQuote,
 } from "./gmail.server";
 
-const DEFAULT_QUERY =
-  '(subject:RFQ OR subject:cotação OR subject:cotacao OR subject:quotation OR subject:"quote") -in:chats';
+const DEFAULT_SUBJECT_TERMS = ["RFQ", "cotação", "cotacao", "quotation", "quote"];
+
+// Gmail search syntax: a bare multi-word term needs quotes to be treated as a
+// phrase, otherwise each word is ANDed separately.
+function gmailTerm(term: string) {
+  const trimmed = term.trim();
+  return trimmed.includes(" ") ? `"${trimmed.replace(/"/g, "")}"` : trimmed;
+}
+
+function buildGmailQuery(filters: {
+  subjectTerms: string[];
+  bodyTerms: string[];
+  fromAddresses: string[];
+}) {
+  const clauses: string[] = [];
+
+  const contentParts: string[] = [];
+  const subjectTerms = filters.subjectTerms.length ? filters.subjectTerms : DEFAULT_SUBJECT_TERMS;
+  for (const term of subjectTerms) contentParts.push(`subject:${gmailTerm(term)}`);
+  for (const term of filters.bodyTerms) contentParts.push(gmailTerm(term));
+  clauses.push(`(${contentParts.join(" OR ")})`);
+
+  if (filters.fromAddresses.length) {
+    clauses.push(`(${filters.fromAddresses.map((a) => `from:${gmailTerm(a)}`).join(" OR ")})`);
+  }
+
+  clauses.push("-in:chats");
+  return clauses.join(" ");
+}
 
 function senderName(from: string) {
   const match = from.match(/^\s*"?([^"<]+?)"?\s*</);
@@ -24,12 +51,23 @@ export const syncInbox = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) =>
     z
-      .object({ days: z.number().int().min(1).max(365).default(30), limit: z.number().int().min(1).max(40).default(15) })
+      .object({
+        days: z.number().int().min(1).max(365).default(30),
+        limit: z.number().int().min(1).max(40).default(15),
+        subjectTerms: z.array(z.string()).optional().default([]),
+        bodyTerms: z.array(z.string()).optional().default([]),
+        fromAddresses: z.array(z.string()).optional().default([]),
+      })
       .parse(data ?? {}),
   )
   .handler(async ({ data, context }) => {
     const supabase = context.supabase;
-    const ids = await listMessageIds(`${DEFAULT_QUERY} newer_than:${data.days}d`, 100);
+    const query = buildGmailQuery({
+      subjectTerms: data.subjectTerms,
+      bodyTerms: data.bodyTerms,
+      fromAddresses: data.fromAddresses,
+    });
+    const ids = await listMessageIds(`${query} newer_than:${data.days}d`, 100);
 
     const { data: known } = await supabase
       .from("email_imports")
