@@ -180,80 +180,109 @@ export async function parseQuoteWithAI(input: {
   const apiKey = process.env["LOVABLE_API_KEY"];
   if (!apiKey) throw new Error("Serviço de leitura automática indisponível.");
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const itemSchema = {
+    type: "object",
+    properties: {
+      product: { type: ["string", "null"] },
+      item_code: { type: ["string", "null"] },
+      description: { type: ["string", "null"] },
+      material: { type: ["string", "null"] },
+      class: { type: ["string", "null"] },
+      face: { type: ["string", "null"] },
+      sch_thk: { type: ["string", "null"] },
+      dn: { type: ["string", "null"] },
+      qty: { type: ["number", "null"] },
+      price: { type: ["number", "null"] },
+    },
+    required: [
+      "product",
+      "item_code",
+      "description",
+      "material",
+      "class",
+      "face",
+      "sch_thk",
+      "dn",
+      "qty",
+      "price",
+    ],
+    additionalProperties: false,
+  };
+
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "google/gemini-3.8-flash",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+      model: "openai/gpt-6-astra",
+      reasoning: { effort: "low" },
+      store: false,
+      instructions: SYSTEM_PROMPT,
+      input: [
         {
           role: "user",
           content: `Assunto: ${input.subject}\nDe: ${input.from}\n\nCorpo:\n${input.body}\n\nAnexos:\n${input.attachmentText}`,
         },
       ],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "registrar_cotacao",
-            description: "Registra os dados da cotação encontrada no e-mail.",
-            parameters: {
-              type: "object",
-              properties: {
-                rfq_number: { type: ["string", "null"] },
-                client_name: { type: ["string", "null"] },
-                supplier_name: { type: ["string", "null"] },
-                currency: { type: "string" },
-                quote_date: { type: ["string", "null"], description: "AAAA-MM-DD" },
-                confidence: { type: "string", enum: ["alta", "media", "baixa"] },
-                summary: { type: "string" },
-                items: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      product: { type: ["string", "null"] },
-                      item_code: { type: ["string", "null"] },
-                      description: { type: ["string", "null"] },
-                      material: { type: ["string", "null"] },
-                      class: { type: ["string", "null"] },
-                      face: { type: ["string", "null"] },
-                      sch_thk: { type: ["string", "null"] },
-                      dn: { type: ["string", "null"] },
-                      qty: { type: ["number", "null"] },
-                      price: { type: ["number", "null"] },
-                    },
-                    required: ["product", "price"],
-                    additionalProperties: false,
-                  },
-                },
-              },
-              required: ["rfq_number", "supplier_name", "items", "confidence", "summary", "currency"],
-              additionalProperties: false,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "cotacao",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              rfq_number: { type: ["string", "null"] },
+              client_name: { type: ["string", "null"] },
+              supplier_name: { type: ["string", "null"] },
+              currency: { type: "string" },
+              quote_date: { type: ["string", "null"], description: "AAAA-MM-DD" },
+              confidence: { type: "string", enum: ["alta", "media", "baixa"] },
+              summary: { type: "string" },
+              items: { type: "array", items: itemSchema },
             },
+            required: [
+              "rfq_number",
+              "client_name",
+              "supplier_name",
+              "currency",
+              "quote_date",
+              "confidence",
+              "summary",
+              "items",
+            ],
+            additionalProperties: false,
           },
         },
-      ],
-      tool_choice: { type: "function", function: { name: "registrar_cotacao" } },
+      },
     }),
   });
 
   if (!res.ok) {
     const body = await res.text();
     console.error(`AI parse failed [${res.status}]: ${body}`);
-    if (res.status === 429) throw new Error("Limite de leituras automáticas atingido. Tente de novo em alguns minutos.");
+    if (res.status === 429)
+      throw new Error("Limite de leituras automáticas atingido. Tente de novo em alguns minutos.");
     if (res.status === 402) throw new Error("Créditos de IA insuficientes para ler os e-mails.");
     throw new Error("Não consegui interpretar o e-mail automaticamente.");
   }
 
   const json = (await res.json()) as {
-    choices?: { message?: { tool_calls?: { function?: { arguments?: string } }[] } }[];
+    output_text?: string;
+    output?: { type?: string; content?: { type?: string; text?: string }[] }[];
   };
-  const args = json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-  if (!args) return null;
+
+  let text = json.output_text ?? "";
+  if (!text) {
+    for (const item of json.output ?? []) {
+      for (const part of item.content ?? []) {
+        if (part.type === "output_text" && part.text) text += part.text;
+      }
+    }
+  }
+  if (!text.trim()) return null;
+
   try {
-    const parsed = JSON.parse(args) as ParsedQuote;
+    const parsed = JSON.parse(text) as ParsedQuote;
     return { ...parsed, items: parsed.items ?? [] };
   } catch {
     return null;
