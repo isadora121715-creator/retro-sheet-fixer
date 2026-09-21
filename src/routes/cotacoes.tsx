@@ -79,7 +79,7 @@ function QuotesPage() {
   async function handleExport() {
     setExporting(true);
     try {
-      const rows = (await fetchExport({ data: { category } })) as Array<Record<string, unknown>>;
+      const rows = (await fetchExport({ data: { category } })) as unknown as Array<Record<string, unknown>>;
       const XLSX = await import("xlsx");
       const flat = rows.map((r) => {
         const rfq = (r["rfq"] ?? {}) as Record<string, unknown>;
