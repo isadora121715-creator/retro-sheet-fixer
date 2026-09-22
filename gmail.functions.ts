@@ -4,6 +4,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import {
   extractMessageText,
   getMessage,
+  GmailSyncPausedError,
   headerValue,
   listMessageIds,
   parseQuoteWithAI,
@@ -11,13 +12,13 @@ import {
 } from "./gmail.server";
 
 const DEFAULT_SUBJECT_TERMS = ["RFQ", "cotação", "cotacao", "quotation", "quote"];
-// Once an RFQ turns into a placed order, the subject gets a "PO ####" tag
-// (e.g. "TSP PO 001.735 - HCI SC - RFQ 518723 - ..."). Those aren't open
-// quote requests anymore, so they're excluded from the sync by default.
+// Quando uma RFQ vira um pedido fechado, o assunto ganha uma tag "PO ####"
+// (ex.: "TSP PO 001.735 - HCI SC - RFQ 518723 - ..."). Isso não é mais uma
+// cotação em aberto, então fica de fora da busca por padrão.
 const DEFAULT_EXCLUDE_SUBJECT_TERMS = ["PO"];
 
-// Gmail search syntax: a bare multi-word term needs quotes to be treated as a
-// phrase, otherwise each word is ANDed separately.
+// Sintaxe de busca do Gmail: um termo com espaço precisa de aspas para ser
+// tratado como frase, senão cada palavra é combinada separadamente (AND).
 function gmailTerm(term: string) {
   const trimmed = term.trim();
   return trimmed.includes(" ") ? `"${trimmed.replace(/"/g, "")}"` : trimmed;
@@ -50,10 +51,10 @@ function buildGmailQuery(filters: {
   return clauses.join(" ");
 }
 
-// Backup check run in code, in case Gmail's own subject: search doesn't
-// exclude a message the way we expect. Matches whole words only, case
-// insensitive, so "PO" excludes "TSP PO 001.735" but not "Important" or
-// "Proposal".
+// Checagem extra feita no código, caso a busca subject: do próprio Gmail não
+// exclua a mensagem do jeito esperado. Só bate palavra inteira, sem
+// diferenciar maiúsculas/minúsculas, então "PO" exclui "TSP PO 001.735" mas
+// não "Important" nem "Proposal".
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -110,17 +111,21 @@ export const syncInbox = createServerFn({ method: "POST" })
     let imported = 0;
     let failed = 0;
     let skipped = 0;
+    let processed = 0;
+    let paused = false;
+    let pausedReason: string | null = null;
 
     for (const id of fresh) {
       try {
         const msg = await getMessage(id);
         const subject = headerValue(msg, "Subject");
 
-        // Belt-and-suspenders: even though the Gmail query already excludes
-        // these, double-check here in case Gmail's own tokenizing of
-        // subject: doesn't line up with what we expect.
+        // Cinto e suspensório: mesmo a busca do Gmail já excluindo essas
+        // mensagens, confere de novo aqui, caso a tokenização do subject: do
+        // próprio Gmail não bata exatamente com o esperado.
         if (subjectMatchesExcludedTerm(subject, excludeSubjectTerms)) {
           skipped += 1;
+          processed += 1;
           continue;
         }
 
@@ -133,6 +138,15 @@ export const syncInbox = createServerFn({ method: "POST" })
         try {
           parsed = await parseQuoteWithAI({ subject, from, body, attachmentText });
         } catch (error) {
+          if (error instanceof GmailSyncPausedError) {
+            // Falha temporária (limite/créditos de IA) — não é culpa desse
+            // e-mail. Não grava nada para ele, para que ele (e o resto do
+            // lote) sejam tentados de novo na próxima sincronização, em vez
+            // de ficarem marcados como "erro" para sempre.
+            paused = true;
+            pausedReason = error.message;
+            break;
+          }
           errorMessage = error instanceof Error ? error.message : "Falha na leitura automática";
         }
 
@@ -158,10 +172,12 @@ export const syncInbox = createServerFn({ method: "POST" })
           error_message: errorMessage,
         });
 
+        processed += 1;
         if (errorMessage) failed += 1;
         else imported += 1;
       } catch (error) {
         console.error("Falha ao processar mensagem", id, error);
+        processed += 1;
         failed += 1;
       }
     }
@@ -171,7 +187,9 @@ export const syncInbox = createServerFn({ method: "POST" })
       imported,
       failed,
       skipped,
-      remaining: Math.max(0, ids.length - seen.size - fresh.length),
+      paused,
+      pausedReason,
+      remaining: Math.max(0, ids.length - seen.size - processed),
     };
   });
 
@@ -311,6 +329,58 @@ export const approveImport = createServerFn({ method: "POST" })
       .eq("id", data.importId);
 
     return { matched, created };
+  });
+
+// Reprocessa um único e-mail que ficou marcado como "erro" (ex.: falhou por
+// limite de IA no momento da sincronização), sem precisar rodar uma busca
+// nova no Gmail.
+export const retryImport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: unknown) => z.object({ importId: z.string().uuid() }).parse(data))
+  .handler(async ({ data, context }) => {
+    const supabase = context.supabase;
+
+    const { data: row, error: fetchError } = await supabase
+      .from("email_imports")
+      .select("id, gmail_message_id, subject, from_address")
+      .eq("id", data.importId)
+      .single();
+    if (fetchError || !row) throw new Error("E-mail não encontrado.");
+
+    const msg = await getMessage(row.gmail_message_id);
+    const subject = headerValue(msg, "Subject") || row.subject || "";
+    const from = headerValue(msg, "From") || row.from_address || "";
+    const { body, attachmentNames, attachmentText } = await extractMessageText(msg);
+
+    let parsed: ParsedQuote | null = null;
+    let errorMessage: string | null = null;
+    try {
+      parsed = await parseQuoteWithAI({ subject, from, body, attachmentText });
+    } catch (error) {
+      errorMessage =
+        error instanceof GmailSyncPausedError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "Falha na leitura automática";
+    }
+
+    const hasItems = (parsed?.items ?? []).some((i) => i.price !== null && i.price !== undefined);
+    const status = errorMessage ? "erro" : hasItems ? "pendente" : "sem_dados";
+
+    const { error: updateError } = await supabase
+      .from("email_imports")
+      .update({
+        detected_rfq: parsed?.rfq_number ?? null,
+        detected_supplier: parsed?.supplier_name ?? senderName(from),
+        status,
+        parsed_payload: parsed ? { ...parsed, attachments: attachmentNames } : null,
+        error_message: errorMessage,
+      })
+      .eq("id", data.importId);
+    if (updateError) throw new Error(updateError.message);
+
+    return { ok: true, status };
   });
 
 export const setImportStatus = createServerFn({ method: "POST" })

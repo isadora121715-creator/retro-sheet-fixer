@@ -1,53 +1,130 @@
-import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CheckCircle2, Loader2, Mail, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { useServerFn } from "@tanstack/react-start";
+import { useState } from "react";
+import { CheckCircle2, Mail, RefreshCw, RotateCw, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
-import { getFilterOptions } from "@/lib/quotes.functions";
-import { importCounts, listImports, setImportStatus, syncInbox } from "@/lib/gmail.functions";
-import type { EmailImportRow, EmailImportStatus } from "@/lib/email-imports.types";
+import { AppShell } from "@/components/AppShell";
+import {
+  approveImport,
+  importCounts,
+  listImports,
+  retryImport,
+  setImportStatus,
+  syncInbox,
+} from "@/lib/gmail.functions";
+import { brl, dash, shortDate } from "@/lib/format";
 import { useSyncSettings } from "@/hooks/use-sync-settings";
-import { ImportReviewDialog } from "@/components/import-review-dialog";
 import { GmailSearchSettingsDialog } from "@/components/gmail-search-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent } from "@/components/ui/card";
-import { shortDate } from "@/lib/format";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export const Route = createFileRoute("/emails")({
-  component: Emails,
+  head: () => ({
+    meta: [
+      { title: "Caixa de cotações | Cotações HCI" },
+      {
+        name: "description",
+        content: "E-mails de cotação lidos automaticamente, prontos para conferir e lançar no cadastro.",
+      },
+      { property: "og:title", content: "Caixa de cotações | Cotações HCI" },
+      {
+        property: "og:description",
+        content: "E-mails de cotação lidos automaticamente, prontos para conferir e lançar no cadastro.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+  }),
+  component: () => (
+    <AppShell>
+      <EmailsPage />
+    </AppShell>
+  ),
 });
 
-const STATUS_TABS: { value: EmailImportStatus | "todos"; label: string }[] = [
-  { value: "pendente", label: "Pendentes" },
-  { value: "aplicado", label: "Aplicados" },
-  { value: "sem_dados", label: "Sem dados" },
-  { value: "erro", label: "Erro" },
-  { value: "ignorado", label: "Ignorados" },
-  { value: "todos", label: "Todos" },
+type ParsedItem = {
+  product?: string | null;
+  item_code?: string | null;
+  description?: string | null;
+  material?: string | null;
+  class?: string | null;
+  face?: string | null;
+  sch_thk?: string | null;
+  dn?: string | null;
+  qty?: number | null;
+  price?: number | null;
+};
+
+type ParsedPayload = {
+  rfq_number?: string | null;
+  client_name?: string | null;
+  supplier_name?: string | null;
+  quote_date?: string | null;
+  confidence?: string;
+  summary?: string;
+  items?: ParsedItem[];
+};
+
+const CATEGORIES = [
+  "FLANGES",
+  "TUBULARES",
+  "FORJADINHOS",
+  "JUNTA ANEL",
+  "JUNTA ESPIRAL",
+  "PARAFUSO",
+  "FIGURA 8/RAQ",
+  "PETROBRAS",
+  "GERAL",
 ];
 
-function Emails() {
-  const queryClient = useQueryClient();
-  const [status, setStatus] = useState<EmailImportStatus | "todos">("pendente");
-  const [reviewing, setReviewing] = useState<EmailImportRow | null>(null);
+const STATUS_LABEL: Record<string, string> = {
+  pendente: "Aguardando conferência",
+  aplicado: "Lançado",
+  sem_dados: "Sem preços",
+  erro: "Falha na leitura",
+  ignorado: "Ignorado",
+  todos: "Todos",
+};
+
+function EmailsPage() {
+  const qc = useQueryClient();
+  const runSync = useServerFn(syncInbox);
+  const fetchImports = useServerFn(listImports);
+  const fetchCounts = useServerFn(importCounts);
+  const runApprove = useServerFn(approveImport);
+  const runStatus = useServerFn(setImportStatus);
+  const runRetry = useServerFn(retryImport);
+
+  const [status, setStatus] = useState("pendente");
+  const [openId, setOpenId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const syncSettings = useSyncSettings();
-
-  const counts = useQuery({ queryKey: ["import-counts"], queryFn: () => importCounts() });
-  const filterOptions = useQuery({
-    queryKey: ["filter-options"],
-    queryFn: () => getFilterOptions(),
+  const [draft, setDraft] = useState<{ rfq: string; supplier: string; client: string; category: string }>({
+    rfq: "",
+    supplier: "",
+    client: "",
+    category: "FLANGES",
   });
+
+  const counts = useQuery({ queryKey: ["import-counts"], queryFn: () => fetchCounts({}) });
   const imports = useQuery({
-    queryKey: ["email-imports", status],
-    queryFn: () => listImports({ data: { status } }) as Promise<EmailImportRow[]>,
+    queryKey: ["imports", status],
+    queryFn: () => fetchImports({ data: { status } }),
   });
 
   const sync = useMutation({
     mutationFn: () =>
-      syncInbox({
+      runSync({
         data: {
           days: syncSettings.parsed.days,
           subjectTerms: syncSettings.parsed.subjectTerms,
@@ -56,107 +133,87 @@ function Emails() {
           excludeSubjectTerms: syncSettings.parsed.excludeSubjectTerms,
         },
       }),
-    onSuccess: (result) => {
-      toast.success(
-        `${result.imported} e-mail(s) novo(s) lido(s)` +
-          (result.skipped ? `, ${result.skipped} ignorado(s) por serem pedidos já fechados` : "") +
-          (result.failed ? `, ${result.failed} com falha` : "") +
-          ".",
-      );
-      queryClient.invalidateQueries({ queryKey: ["email-imports"] });
-      queryClient.invalidateQueries({ queryKey: ["import-counts"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    onSuccess: (res) => {
+      const message =
+        `${res.imported} e-mail(s) lido(s)` +
+        (res.skipped ? `, ${res.skipped} ignorado(s) por serem pedidos já fechados` : "") +
+        (res.failed ? `, ${res.failed} com problema` : "");
+      if (res.paused) {
+        toast.warning(`${message}. Sincronização pausada: ${res.pausedReason ?? "limite atingido"}`);
+      } else {
+        toast.success(message);
+      }
+      qc.invalidateQueries({ queryKey: ["imports"] });
+      qc.invalidateQueries({ queryKey: ["import-counts"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Falha ao sincronizar o Gmail.");
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const retry = useMutation({
+    mutationFn: (importId: string) => runRetry({ data: { importId } }),
+    onSuccess: (res) => {
+      toast.success(res.status === "erro" ? "Ainda não deu para ler esse e-mail." : "E-mail relido com sucesso.");
+      qc.invalidateQueries({ queryKey: ["imports"] });
+      qc.invalidateQueries({ queryKey: ["import-counts"] });
     },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const approve = useMutation({
+    mutationFn: (vars: Parameters<typeof approveImport>[0]) => runApprove(vars),
+    onSuccess: (res) => {
+      toast.success(`Lançado: ${res.matched} item(ns) atualizados, ${res.created} novos`);
+      setOpenId(null);
+      qc.invalidateQueries({ queryKey: ["imports"] });
+      qc.invalidateQueries({ queryKey: ["import-counts"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["quotes"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const ignore = useMutation({
-    mutationFn: (importId: string) => setImportStatus({ data: { importId, status: "ignorado" } }),
+    mutationFn: (id: string) => runStatus({ data: { importId: id, status: "ignorado" as const } }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["email-imports"] });
-      queryClient.invalidateQueries({ queryKey: ["import-counts"] });
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Falha ao ignorar o e-mail.");
+      qc.invalidateQueries({ queryKey: ["imports"] });
+      qc.invalidateQueries({ queryKey: ["import-counts"] });
     },
   });
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-5xl space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">E-mails</h1>
+          <h1 className="font-display text-2xl font-semibold">Caixa de cotações</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Cotações recebidas por e-mail, lidas automaticamente e prontas para revisar.
+            Os e-mails de cotação do seu Gmail são lidos e preparados para você só conferir.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger className="w-[210px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {["pendente", "aplicado", "sem_dados", "erro", "ignorado", "todos"].map((s) => (
+                <SelectItem key={s} value={s}>
+                  {STATUS_LABEL[s]}
+                  {counts.data?.[s] !== undefined ? ` (${counts.data[s]})` : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="outline" onClick={() => setSettingsOpen(true)} title="Filtros de busca">
             <SlidersHorizontal className="h-4 w-4" />
             Filtros
           </Button>
           <Button onClick={() => sync.mutate()} disabled={sync.isPending}>
-            {sync.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-            Sincronizar Gmail
+            <RefreshCw className={`mr-2 h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} />
+            {sync.isPending ? "Lendo e-mails…" : "Buscar e-mails"}
           </Button>
         </div>
-      </div>
-
-      <Tabs value={status} onValueChange={(v) => setStatus(v as EmailImportStatus | "todos")}>
-        <TabsList className="flex-wrap">
-          {STATUS_TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value} className="gap-1.5">
-              {tab.label}
-              {tab.value !== "todos" ? (
-                <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-                  {counts.data?.[tab.value] ?? 0}
-                </Badge>
-              ) : null}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-
-      <div className="flex flex-col gap-3">
-        {imports.isLoading ? (
-          <div className="flex justify-center py-16">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : imports.data && imports.data.length > 0 ? (
-          imports.data.map((row) => (
-            <ImportCard
-              key={row.id}
-              row={row}
-              onReview={() => setReviewing(row)}
-              onIgnore={() => ignore.mutate(row.id)}
-              ignoring={ignore.isPending && ignore.variables === row.id}
-            />
-          ))
-        ) : (
-          <Card>
-            <CardContent className="flex flex-col items-center gap-2 py-16 text-center">
-              <Mail className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                Nenhum e-mail nessa categoria. Clique em "Sincronizar Gmail" para buscar novas
-                cotações.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      <ImportReviewDialog
-        importRow={reviewing}
-        open={reviewing !== null}
-        onOpenChange={(open) => !open && setReviewing(null)}
-        categories={filterOptions.data?.categories ?? []}
-      />
+      </header>
 
       <GmailSearchSettingsDialog
         open={settingsOpen}
@@ -165,77 +222,186 @@ function Emails() {
         onFormChange={syncSettings.setForm}
         onSave={syncSettings.save}
       />
-    </div>
-  );
-}
 
-const STATUS_BADGE: Record<
-  EmailImportStatus,
-  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
-> = {
-  pendente: { label: "Pendente", variant: "outline" },
-  aplicado: { label: "Aplicado", variant: "default" },
-  sem_dados: { label: "Sem dados", variant: "secondary" },
-  erro: { label: "Erro", variant: "destructive" },
-  ignorado: { label: "Ignorado", variant: "secondary" },
-};
-
-function ImportCard({
-  row,
-  onReview,
-  onIgnore,
-  ignoring,
-}: {
-  row: EmailImportRow;
-  onReview: () => void;
-  onIgnore: () => void;
-  ignoring: boolean;
-}) {
-  const badge = STATUS_BADGE[row.status];
-  const itemsCount = row.parsed_payload?.items?.length ?? 0;
-
-  return (
-    <Card>
-      <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate font-medium text-foreground">{row.subject || "(sem assunto)"}</p>
-            <Badge variant={badge.variant}>{badge.label}</Badge>
-          </div>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {row.from_name || row.from_address} · {shortDate(row.received_at)}
+      {imports.isLoading ? (
+        <Skeleton className="h-72 rounded-lg" />
+      ) : (imports.data ?? []).length === 0 ? (
+        <div className="panel flex flex-col items-center gap-3 p-12 text-center">
+          <Mail className="h-8 w-8 text-muted-foreground" />
+          <p className="font-medium">Nada por aqui</p>
+          <p className="max-w-sm text-sm text-muted-foreground">
+            Clique em “Buscar e-mails” para ler as cotações recebidas nos últimos 30 dias.
           </p>
-          {row.detected_rfq || row.detected_supplier ? (
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {row.detected_rfq ? <>RFQ: {row.detected_rfq}</> : null}
-              {row.detected_rfq && row.detected_supplier ? " · " : ""}
-              {row.detected_supplier ? <>Fornecedor: {row.detected_supplier}</> : null}
-              {itemsCount ? ` · ${itemsCount} item(ns) identificado(s)` : ""}
-            </p>
-          ) : null}
-          {row.status === "erro" && row.error_message ? (
-            <p className="mt-1.5 text-xs text-destructive">{row.error_message}</p>
-          ) : row.snippet ? (
-            <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{row.snippet}</p>
-          ) : null}
         </div>
-        {row.status === "pendente" ? (
-          <div className="flex shrink-0 gap-2">
-            <Button variant="outline" size="sm" onClick={onIgnore} disabled={ignoring}>
-              {ignoring ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Ban className="h-4 w-4" />
-              )}
-              Ignorar
-            </Button>
-            <Button size="sm" onClick={onReview}>
-              <CheckCircle2 className="h-4 w-4" />
-              Revisar
-            </Button>
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
+      ) : (
+        <ul className="space-y-3">
+          {(imports.data ?? []).map((row) => {
+            const payload = (row.parsed_payload ?? {}) as ParsedPayload;
+            const items = payload.items ?? [];
+            const open = openId === row.id;
+            return (
+              <li key={row.id} className="panel p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{dash(row.subject)}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {dash(row.from_name)} · {shortDate(row.received_at)}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
+                      {payload.summary || row.snippet}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    <Badge variant={row.status === "pendente" ? "default" : "secondary"}>
+                      {STATUS_LABEL[row.status] ?? row.status}
+                    </Badge>
+                    {payload.confidence ? (
+                      <span className="text-xs text-muted-foreground">confiança {payload.confidence}</span>
+                    ) : null}
+                  </div>
+                </div>
+
+                {row.error_message ? (
+                  <p className="mt-3 text-sm text-destructive">{row.error_message}</p>
+                ) : null}
+
+                <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  <span>RFQ: {dash(payload.rfq_number ?? row.detected_rfq)}</span>
+                  <span>Fornecedor: {dash(payload.supplier_name ?? row.detected_supplier)}</span>
+                  <span>{items.length} item(ns)</span>
+                </div>
+
+                {row.status === "pendente" ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={open ? "secondary" : "default"}
+                      onClick={() => {
+                        setOpenId(open ? null : row.id);
+                        setDraft({
+                          rfq: payload.rfq_number ?? row.detected_rfq ?? "",
+                          supplier: payload.supplier_name ?? row.detected_supplier ?? "",
+                          client: payload.client_name ?? "",
+                          category: "FLANGES",
+                        });
+                      }}
+                    >
+                      {open ? "Fechar" : "Conferir e lançar"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => ignore.mutate(row.id)}>
+                      <X className="mr-1 h-3.5 w-3.5" />
+                      Ignorar
+                    </Button>
+                  </div>
+                ) : null}
+
+                {row.status === "erro" ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={retry.isPending && retry.variables === row.id}
+                      onClick={() => retry.mutate(row.id)}
+                    >
+                      <RotateCw
+                        className={`mr-1 h-3.5 w-3.5 ${
+                          retry.isPending && retry.variables === row.id ? "animate-spin" : ""
+                        }`}
+                      />
+                      Tentar novamente
+                    </Button>
+                  </div>
+                ) : null}
+
+                {open ? (
+                  <div className="mt-5 space-y-4 rounded-md bg-secondary/40 p-4">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <Input
+                        placeholder="N° RFQ"
+                        value={draft.rfq}
+                        onChange={(e) => setDraft({ ...draft, rfq: e.target.value })}
+                      />
+                      <Input
+                        placeholder="Fornecedor"
+                        value={draft.supplier}
+                        onChange={(e) => setDraft({ ...draft, supplier: e.target.value })}
+                      />
+                      <Input
+                        placeholder="Cliente"
+                        value={draft.client}
+                        onChange={(e) => setDraft({ ...draft, client: e.target.value })}
+                      />
+                      <Select
+                        value={draft.category}
+                        onValueChange={(v) => setDraft({ ...draft, category: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CATEGORIES.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[620px] text-sm">
+                        <thead className="text-left text-xs uppercase text-muted-foreground">
+                          <tr>
+                            <th className="py-2">Produto</th>
+                            <th className="py-2">Especificação</th>
+                            <th className="py-2 text-right">Qtd</th>
+                            <th className="py-2 text-right">Preço</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {items.map((item, i) => (
+                            <tr key={i}>
+                              <td className="py-2">{dash(item.product)}</td>
+                              <td className="py-2 text-xs text-muted-foreground">
+                                {[item.material, item.dn ? `DN ${item.dn}` : null, item.class, item.sch_thk]
+                                  .filter(Boolean)
+                                  .join(" · ") || "—"}
+                              </td>
+                              <td className="tabular py-2 text-right">{item.qty ?? "—"}</td>
+                              <td className="tabular py-2 text-right">{brl(item.price ?? null)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <Button
+                      size="sm"
+                      disabled={approve.isPending || !draft.rfq || !draft.supplier}
+                      onClick={() =>
+                        approve.mutate({
+                          data: {
+                            importId: row.id,
+                            rfqNumber: draft.rfq,
+                            supplierName: draft.supplier,
+                            clientName: draft.client,
+                            category: draft.category,
+                            quoteDate: payload.quote_date ?? null,
+                            items,
+                          },
+                        })
+                      }
+                    >
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      {approve.isPending ? "Lançando…" : "Lançar no cadastro"}
+                    </Button>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
