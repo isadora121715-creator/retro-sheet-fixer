@@ -8,6 +8,13 @@
       "when": 1789746914022,
       "tag": "0000_create_cotacoes_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790037896901,
+      "tag": "0001_restrict_access_with_user_roles",
+      "breakpoints": true
     }
   ]
 }
