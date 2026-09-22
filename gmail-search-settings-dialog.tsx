@@ -88,6 +88,19 @@ export function GmailSearchSettingsDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
+            <Label>Excluir se o assunto contiver</Label>
+            <Input
+              value={form.excludeSubjectTerms}
+              onChange={(e) => onFormChange({ ...form, excludeSubjectTerms: e.target.value })}
+              placeholder="PO"
+            />
+            <p className="text-xs text-muted-foreground">
+              Fica de fora mesmo que bata com os outros filtros. Por padrão exclui "PO" (pedido já
+              fechado, não é mais uma cotação em aberto).
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
             <Label>Período</Label>
             <Select
               value={String(form.days)}

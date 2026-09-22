@@ -4,6 +4,7 @@ export type SyncSettingsForm = {
   subjectTerms: string;
   bodyTerms: string;
   fromAddresses: string;
+  excludeSubjectTerms: string;
   days: number;
 };
 
@@ -13,6 +14,10 @@ export const DEFAULT_SYNC_SETTINGS: SyncSettingsForm = {
   subjectTerms: "RFQ, cotação, cotacao, quotation, quote",
   bodyTerms: "",
   fromAddresses: "",
+  // Once an RFQ turns into a placed order, the subject gets a "PO ####" tag
+  // (ex.: "TSP PO 001.735 - HCI SC - RFQ 518723 - ..."). Those aren't open
+  // quote requests anymore, so they're skipped by default.
+  excludeSubjectTerms: "PO",
   days: 30,
 };
 
@@ -62,6 +67,7 @@ export function useSyncSettings() {
     subjectTerms: splitList(form.subjectTerms),
     bodyTerms: splitList(form.bodyTerms),
     fromAddresses: splitList(form.fromAddresses),
+    excludeSubjectTerms: splitList(form.excludeSubjectTerms),
     days: form.days,
   };
 

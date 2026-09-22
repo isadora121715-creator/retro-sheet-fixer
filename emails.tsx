@@ -53,11 +53,13 @@ function Emails() {
           subjectTerms: syncSettings.parsed.subjectTerms,
           bodyTerms: syncSettings.parsed.bodyTerms,
           fromAddresses: syncSettings.parsed.fromAddresses,
+          excludeSubjectTerms: syncSettings.parsed.excludeSubjectTerms,
         },
       }),
     onSuccess: (result) => {
       toast.success(
         `${result.imported} e-mail(s) novo(s) lido(s)` +
+          (result.skipped ? `, ${result.skipped} ignorado(s) por serem pedidos já fechados` : "") +
           (result.failed ? `, ${result.failed} com falha` : "") +
           ".",
       );

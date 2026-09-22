@@ -11,6 +11,10 @@ import {
 } from "./gmail.server";
 
 const DEFAULT_SUBJECT_TERMS = ["RFQ", "cotação", "cotacao", "quotation", "quote"];
+// Once an RFQ turns into a placed order, the subject gets a "PO ####" tag
+// (e.g. "TSP PO 001.735 - HCI SC - RFQ 518723 - ..."). Those aren't open
+// quote requests anymore, so they're excluded from the sync by default.
+const DEFAULT_EXCLUDE_SUBJECT_TERMS = ["PO"];
 
 // Gmail search syntax: a bare multi-word term needs quotes to be treated as a
 // phrase, otherwise each word is ANDed separately.
@@ -23,6 +27,7 @@ function buildGmailQuery(filters: {
   subjectTerms: string[];
   bodyTerms: string[];
   fromAddresses: string[];
+  excludeSubjectTerms: string[];
 }) {
   const clauses: string[] = [];
 
@@ -36,8 +41,29 @@ function buildGmailQuery(filters: {
     clauses.push(`(${filters.fromAddresses.map((a) => `from:${gmailTerm(a)}`).join(" OR ")})`);
   }
 
+  const excludeSubjectTerms = filters.excludeSubjectTerms.length
+    ? filters.excludeSubjectTerms
+    : DEFAULT_EXCLUDE_SUBJECT_TERMS;
+  for (const term of excludeSubjectTerms) clauses.push(`-subject:${gmailTerm(term)}`);
+
   clauses.push("-in:chats");
   return clauses.join(" ");
+}
+
+// Backup check run in code, in case Gmail's own subject: search doesn't
+// exclude a message the way we expect. Matches whole words only, case
+// insensitive, so "PO" excludes "TSP PO 001.735" but not "Important" or
+// "Proposal".
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function subjectMatchesExcludedTerm(subject: string, excludeTerms: string[]) {
+  return excludeTerms.some((term) => {
+    const trimmed = term.trim();
+    if (!trimmed) return false;
+    return new RegExp(`\\b${escapeRegExp(trimmed)}\\b`, "i").test(subject);
+  });
 }
 
 function senderName(from: string) {
@@ -57,15 +83,20 @@ export const syncInbox = createServerFn({ method: "POST" })
         subjectTerms: z.array(z.string()).optional().default([]),
         bodyTerms: z.array(z.string()).optional().default([]),
         fromAddresses: z.array(z.string()).optional().default([]),
+        excludeSubjectTerms: z.array(z.string()).optional().default([]),
       })
       .parse(data ?? {}),
   )
   .handler(async ({ data, context }) => {
     const supabase = context.supabase;
+    const excludeSubjectTerms = data.excludeSubjectTerms.length
+      ? data.excludeSubjectTerms
+      : DEFAULT_EXCLUDE_SUBJECT_TERMS;
     const query = buildGmailQuery({
       subjectTerms: data.subjectTerms,
       bodyTerms: data.bodyTerms,
       fromAddresses: data.fromAddresses,
+      excludeSubjectTerms,
     });
     const ids = await listMessageIds(`${query} newer_than:${data.days}d`, 100);
 
@@ -78,11 +109,21 @@ export const syncInbox = createServerFn({ method: "POST" })
 
     let imported = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const id of fresh) {
       try {
         const msg = await getMessage(id);
         const subject = headerValue(msg, "Subject");
+
+        // Belt-and-suspenders: even though the Gmail query already excludes
+        // these, double-check here in case Gmail's own tokenizing of
+        // subject: doesn't line up with what we expect.
+        if (subjectMatchesExcludedTerm(subject, excludeSubjectTerms)) {
+          skipped += 1;
+          continue;
+        }
+
         const from = headerValue(msg, "From");
         const dateHeader = headerValue(msg, "Date");
         const { body, attachmentNames, attachmentText } = await extractMessageText(msg);
@@ -125,7 +166,13 @@ export const syncInbox = createServerFn({ method: "POST" })
       }
     }
 
-    return { scanned: ids.length, imported, failed, remaining: Math.max(0, ids.length - seen.size - fresh.length) };
+    return {
+      scanned: ids.length,
+      imported,
+      failed,
+      skipped,
+      remaining: Math.max(0, ids.length - seen.size - fresh.length),
+    };
   });
 
 export const listImports = createServerFn({ method: "GET" })
