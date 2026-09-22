@@ -10,8 +10,61 @@ import {
   type ParsedQuote,
 } from "./gmail.server";
 
-const DEFAULT_QUERY =
-  '(subject:RFQ OR subject:cotação OR subject:cotacao OR subject:quotation OR subject:"quote") -in:chats';
+const DEFAULT_SUBJECT_TERMS = ["RFQ", "cotação", "cotacao", "quotation", "quote"];
+// Quando uma RFQ vira um pedido fechado, o assunto ganha uma tag "PO ####"
+// (ex.: "TSP PO 001.735 - HCI SC - RFQ 518723 - ..."). Isso não é mais uma
+// cotação em aberto, então fica de fora da busca por padrão.
+const DEFAULT_EXCLUDE_SUBJECT_TERMS = ["PO"];
+
+// Sintaxe de busca do Gmail: um termo com espaço precisa de aspas para ser
+// tratado como frase, senão cada palavra é combinada separadamente (AND).
+function gmailTerm(term: string) {
+  const trimmed = term.trim();
+  return trimmed.includes(" ") ? `"${trimmed.replace(/"/g, "")}"` : trimmed;
+}
+
+function buildGmailQuery(filters: {
+  subjectTerms: string[];
+  bodyTerms: string[];
+  fromAddresses: string[];
+  excludeSubjectTerms: string[];
+}) {
+  const clauses: string[] = [];
+
+  const contentParts: string[] = [];
+  const subjectTerms = filters.subjectTerms.length ? filters.subjectTerms : DEFAULT_SUBJECT_TERMS;
+  for (const term of subjectTerms) contentParts.push(`subject:${gmailTerm(term)}`);
+  for (const term of filters.bodyTerms) contentParts.push(gmailTerm(term));
+  clauses.push(`(${contentParts.join(" OR ")})`);
+
+  if (filters.fromAddresses.length) {
+    clauses.push(`(${filters.fromAddresses.map((a) => `from:${gmailTerm(a)}`).join(" OR ")})`);
+  }
+
+  const excludeSubjectTerms = filters.excludeSubjectTerms.length
+    ? filters.excludeSubjectTerms
+    : DEFAULT_EXCLUDE_SUBJECT_TERMS;
+  for (const term of excludeSubjectTerms) clauses.push(`-subject:${gmailTerm(term)}`);
+
+  clauses.push("-in:chats");
+  return clauses.join(" ");
+}
+
+// Checagem extra feita no código, caso a busca subject: do próprio Gmail não
+// exclua a mensagem do jeito esperado. Só bate palavra inteira, sem
+// diferenciar maiúsculas/minúsculas, então "PO" exclui "TSP PO 001.735" mas
+// não "Important" nem "Proposal".
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function subjectMatchesExcludedTerm(subject: string, excludeTerms: string[]) {
+  return excludeTerms.some((term) => {
+    const trimmed = term.trim();
+    if (!trimmed) return false;
+    return new RegExp(`\\b${escapeRegExp(trimmed)}\\b`, "i").test(subject);
+  });
+}
 
 function senderName(from: string) {
   const match = from.match(/^\s*"?([^"<]+?)"?\s*</);
@@ -24,12 +77,28 @@ export const syncInbox = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) =>
     z
-      .object({ days: z.number().int().min(1).max(365).default(30), limit: z.number().int().min(1).max(40).default(15) })
+      .object({
+        days: z.number().int().min(1).max(365).default(30),
+        limit: z.number().int().min(1).max(40).default(15),
+        subjectTerms: z.array(z.string()).optional().default([]),
+        bodyTerms: z.array(z.string()).optional().default([]),
+        fromAddresses: z.array(z.string()).optional().default([]),
+        excludeSubjectTerms: z.array(z.string()).optional().default([]),
+      })
       .parse(data ?? {}),
   )
   .handler(async ({ data, context }) => {
     const supabase = context.supabase;
-    const ids = await listMessageIds(`${DEFAULT_QUERY} newer_than:${data.days}d`, 100);
+    const excludeSubjectTerms = data.excludeSubjectTerms.length
+      ? data.excludeSubjectTerms
+      : DEFAULT_EXCLUDE_SUBJECT_TERMS;
+    const query = buildGmailQuery({
+      subjectTerms: data.subjectTerms,
+      bodyTerms: data.bodyTerms,
+      fromAddresses: data.fromAddresses,
+      excludeSubjectTerms,
+    });
+    const ids = await listMessageIds(`${query} newer_than:${data.days}d`, 100);
 
     const { data: known } = await supabase
       .from("email_imports")
@@ -40,11 +109,21 @@ export const syncInbox = createServerFn({ method: "POST" })
 
     let imported = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const id of fresh) {
       try {
         const msg = await getMessage(id);
         const subject = headerValue(msg, "Subject");
+
+        // Cinto e suspensório: mesmo a busca do Gmail já excluindo essas
+        // mensagens, confere de novo aqui, caso a tokenização do subject: do
+        // próprio Gmail não bata exatamente com o esperado.
+        if (subjectMatchesExcludedTerm(subject, excludeSubjectTerms)) {
+          skipped += 1;
+          continue;
+        }
+
         const from = headerValue(msg, "From");
         const dateHeader = headerValue(msg, "Date");
         const { body, attachmentNames, attachmentText } = await extractMessageText(msg);
@@ -87,7 +166,13 @@ export const syncInbox = createServerFn({ method: "POST" })
       }
     }
 
-    return { scanned: ids.length, imported, failed, remaining: Math.max(0, ids.length - seen.size - fresh.length) };
+    return {
+      scanned: ids.length,
+      imported,
+      failed,
+      skipped,
+      remaining: Math.max(0, ids.length - seen.size - fresh.length),
+    };
   });
 
 export const listImports = createServerFn({ method: "GET" })

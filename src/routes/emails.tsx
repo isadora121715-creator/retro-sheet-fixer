@@ -2,11 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
-import { CheckCircle2, Mail, RefreshCw, X } from "lucide-react";
+import { CheckCircle2, Mail, RefreshCw, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { approveImport, importCounts, listImports, setImportStatus, syncInbox } from "@/lib/gmail.functions";
 import { brl, dash, shortDate } from "@/lib/format";
+import { useSyncSettings } from "@/hooks/use-sync-settings";
+import { GmailSearchSettingsDialog } from "@/components/gmail-search-settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -97,6 +99,8 @@ function EmailsPage() {
 
   const [status, setStatus] = useState("pendente");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const syncSettings = useSyncSettings();
   const [draft, setDraft] = useState<{ rfq: string; supplier: string; client: string; category: string }>({
     rfq: "",
     supplier: "",
@@ -111,9 +115,22 @@ function EmailsPage() {
   });
 
   const sync = useMutation({
-    mutationFn: () => runSync({ data: { days: 30, limit: 15 } }),
+    mutationFn: () =>
+      runSync({
+        data: {
+          days: syncSettings.parsed.days,
+          subjectTerms: syncSettings.parsed.subjectTerms,
+          bodyTerms: syncSettings.parsed.bodyTerms,
+          fromAddresses: syncSettings.parsed.fromAddresses,
+          excludeSubjectTerms: syncSettings.parsed.excludeSubjectTerms,
+        },
+      }),
     onSuccess: (res) => {
-      toast.success(`${res.imported} e-mail(s) lido(s) · ${res.failed} com problema`);
+      toast.success(
+        `${res.imported} e-mail(s) lido(s)` +
+          (res.skipped ? `, ${res.skipped} ignorado(s) por serem pedidos já fechados` : "") +
+          (res.failed ? `, ${res.failed} com problema` : ""),
+      );
       qc.invalidateQueries({ queryKey: ["imports"] });
       qc.invalidateQueries({ queryKey: ["import-counts"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -165,12 +182,24 @@ function EmailsPage() {
               ))}
             </SelectContent>
           </Select>
+          <Button variant="outline" onClick={() => setSettingsOpen(true)} title="Filtros de busca">
+            <SlidersHorizontal className="h-4 w-4" />
+            Filtros
+          </Button>
           <Button onClick={() => sync.mutate()} disabled={sync.isPending}>
             <RefreshCw className={`mr-2 h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} />
             {sync.isPending ? "Lendo e-mails…" : "Buscar e-mails"}
           </Button>
         </div>
       </header>
+
+      <GmailSearchSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        form={syncSettings.form}
+        onFormChange={syncSettings.setForm}
+        onSave={syncSettings.save}
+      />
 
       {imports.isLoading ? (
         <Skeleton className="h-72 rounded-lg" />
